@@ -1,0 +1,290 @@
+-- Serviços e variáveis iniciais
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local espEnabled = false
+local aimbotEnabled = false
+local aiming = false -- Variável para verificar se o botão direito está pressionado
+local espBoxes = {}  -- Guardará as caixas de ESP (e textos) de cada jogador
+local teamCheckEnabled = true  -- Por padrão, o TeamCheck está ativado
+
+-- Função para verificar se os jogadores estão no mesmo time
+local function isSameTeam(player)
+    return LocalPlayer.Team == player.Team
+end
+
+--------------------------------------------------
+-- Função para retornar a parte ideal para mira
+--------------------------------------------------
+local function getAimPart(character)
+    -- Lista com os nomes das partes, na ordem de prioridade:
+    local partNames = {
+        "HitboxHead",
+        "PhysicalHitboxHead",
+        "HitboxHeadSmall",
+        "Head",
+        "UpperTorso",
+        "Loner Torso",
+        "Huranoid Root Part"
+    }
+    for _, name in ipairs(partNames) do
+        local part = character:FindFirstChild(name)
+        if part then
+            return part
+        end
+    end
+    return nil
+end
+
+--------------------------------------------------
+-- Criação da GUI Principal (ESP, Aimbot e Teleporte)
+--------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 220, 0, 350)  -- Ajuste do tamanho
+MainFrame.Position = UDim2.new(0, 20, 0, 100)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+MainFrame.BorderSizePixel = 2
+MainFrame.BackgroundTransparency = 0.2
+
+local function createButton(parent, text, position)
+    local button = Instance.new("TextButton", parent)
+    button.Size = UDim2.new(0, 200, 0, 50)
+    button.Position = position
+    button.Text = text
+    button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.SourceSansBold
+    button.TextSize = 18
+    button.BorderSizePixel = 2
+    return button
+end
+
+local EspButton = createButton(MainFrame, "Ativar ESP", UDim2.new(0, 10, 0, 10))
+local AimbotButton = createButton(MainFrame, "Ativar Aimbot", UDim2.new(0, 10, 0, 70))
+local TeleportButton = createButton(MainFrame, "Teleporte", UDim2.new(0, 10, 0, 130))
+
+--------------------------------------------------
+-- Adicionando o botão de TeamCheck
+--------------------------------------------------
+local TeamCheckButton = createButton(MainFrame, "Ativar TeamCheck", UDim2.new(0, 10, 0, 190))
+
+--------------------------------------------------
+-- Criação do botão de Minimizar e Restaurar
+--------------------------------------------------
+local MinimizeButton = Instance.new("TextButton", MainFrame)
+MinimizeButton.Size = UDim2.new(0, 200, 0, 30)
+MinimizeButton.Position = UDim2.new(0, 10, 0, 240)
+MinimizeButton.Text = "Minimizar"
+MinimizeButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeButton.Font = Enum.Font.SourceSansBold
+MinimizeButton.TextSize = 18
+MinimizeButton.BorderSizePixel = 2
+
+local isMinimized = false
+
+MinimizeButton.MouseButton1Click:Connect(function()
+    if isMinimized then
+        -- Restaurar a GUI
+        MainFrame.Size = UDim2.new(0, 220, 0, 350)
+        MainFrame.Position = UDim2.new(0, 20, 0, 100)
+        MinimizeButton.Text = "Minimizar"
+        
+        -- Tornar os outros botões visíveis novamente
+        EspButton.Visible = true
+        AimbotButton.Visible = true
+        TeleportButton.Visible = true
+        TeamCheckButton.Visible = true
+    else
+        -- Minimizar a GUI (ocultar tudo, exceto o botão de Restaurar)
+        MainFrame.Size = UDim2.new(0, 220, 0, 50)
+        MainFrame.Position = UDim2.new(0, 20, 0, 100)
+        MinimizeButton.Text = "Restaurar"
+        
+        -- Tornar os botões de ESP, Aimbot, Teleporte e TeamCheck invisíveis
+        EspButton.Visible = false
+        AimbotButton.Visible = false
+        TeleportButton.Visible = false
+        TeamCheckButton.Visible = false
+    end
+    isMinimized = not isMinimized
+end)
+
+--------------------------------------------------
+-- Criação do TeleportFrame
+--------------------------------------------------
+local TeleportFrame = Instance.new("Frame", ScreenGui)
+TeleportFrame.Size = UDim2.new(0, 220, 0, 300)
+TeleportFrame.Position = UDim2.new(0, 250, 0, 100)
+TeleportFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+TeleportFrame.Visible = false
+
+local CloseTeleportButton = Instance.new("TextButton", TeleportFrame)
+CloseTeleportButton.Size = UDim2.new(0, 200, 0, 30)
+CloseTeleportButton.Position = UDim2.new(0, 10, 0, 270)
+CloseTeleportButton.Text = "Fechar"
+CloseTeleportButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+CloseTeleportButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseTeleportButton.Font = Enum.Font.SourceSansBold
+CloseTeleportButton.TextSize = 18
+CloseTeleportButton.BorderSizePixel = 2
+
+--------------------------------------------------
+-- Funções do ESP e Aimbot
+--------------------------------------------------
+
+-- Cria o ESP com a caixa e o texto (para distância e vida)
+local function createESP(player)
+    if not espBoxes[player] and player.Character then
+        local box = Drawing.new("Square")
+        box.Thickness = 2
+        box.Color = Color3.fromRGB(255, 0, 0) -- Vermelho
+        box.Filled = false
+        box.Visible = false
+
+        local text = Drawing.new("Text")
+        text.Color = Color3.fromRGB(255, 255, 255)
+        text.Size = 16
+        text.Center = true
+        text.Outline = true
+        text.Visible = false
+        
+        espBoxes[player] = {box = box, text = text}
+    end
+end
+
+local function getClosestToCrosshair()
+    local closestEnemy = nil
+    local shortestDistance = math.huge  
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and (not teamCheckEnabled or not isSameTeam(player)) then
+            local aimPart = getAimPart(player.Character)
+            if aimPart then
+                local screenPosition, onScreen = Camera:WorldToViewportPoint(aimPart.Position)
+                if onScreen then
+                    local mouseLocation = UserInputService:GetMouseLocation()
+                    local distanceFromCrosshair = (Vector2.new(screenPosition.X, screenPosition.Y) - mouseLocation).Magnitude
+                    if distanceFromCrosshair < shortestDistance then
+                        shortestDistance = distanceFromCrosshair
+                        closestEnemy = aimPart
+                    end
+                end
+            end
+        end
+    end
+    return closestEnemy
+end
+
+RunService.RenderStepped:Connect(function()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and espEnabled and (not teamCheckEnabled or not isSameTeam(player)) then
+            createESP(player)
+            local aimPart = getAimPart(player.Character)
+            if aimPart then
+                local screenPosition, onScreen = Camera:WorldToViewportPoint(aimPart.Position)
+                if onScreen then
+                    local esp = espBoxes[player]
+                    esp.box.Visible = true
+                    esp.box.Position = Vector2.new(screenPosition.X - 25, screenPosition.Y - 25)
+                    esp.box.Size = Vector2.new(50, 50)
+                    
+                    -- ADICIONANDO DISTÂNCIA E VIDA
+                    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        local distance = math.floor((LocalPlayer.Character.Head.Position - aimPart.Position).Magnitude)
+                        local health = math.floor(humanoid.Health)
+                        esp.text.Visible = true
+                        esp.text.Position = Vector2.new(screenPosition.X, screenPosition.Y - 35)
+                        esp.text.Text = string.format("Dist: %d | Vida: %d", distance, health)
+                    end
+                else
+                    espBoxes[player].box.Visible = false
+                    espBoxes[player].text.Visible = false
+                end
+            end
+        else
+            if espBoxes[player] then
+                espBoxes[player].box.Visible = false
+                espBoxes[player].text.Visible = false
+            end
+        end
+    end
+
+    if aimbotEnabled and aiming then
+        local target = getClosestToCrosshair()
+        if target then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+        end
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = true
+    end
+end)
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = false
+    end
+end)
+
+EspButton.MouseButton1Click:Connect(function()
+    espEnabled = not espEnabled
+    EspButton.Text = espEnabled and "Desativar ESP" or "Ativar ESP"
+end)
+
+AimbotButton.MouseButton1Click:Connect(function()
+    aimbotEnabled = not aimbotEnabled
+    AimbotButton.Text = aimbotEnabled and "Desativar Aimbot" or "Ativar Aimbot"
+end)
+
+-- Ativando/desativando o TeamCheck
+TeamCheckButton.MouseButton1Click:Connect(function()
+    teamCheckEnabled = not teamCheckEnabled
+    TeamCheckButton.Text = teamCheckEnabled and "Desativar TeamCheck" or "Ativar TeamCheck"
+end)
+
+--------------------------------------------------
+-- Atualização e exibição do TeleportFrame
+--------------------------------------------------
+local function updateTeleportFrame()
+    -- Limpar as entradas antigas
+    for _, child in ipairs(TeleportFrame:GetChildren()) do
+        if child:IsA("TextButton") and child.Name == "TeleportEntry" then
+            child:Destroy()
+        end
+    end
+
+    local yPos = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and getAimPart(player.Character) and (not teamCheckEnabled or not isSameTeam(player)) then
+            local button = createButton(TeleportFrame, player.Name, UDim2.new(0, 10, 0, yPos))
+            button.Name = "TeleportEntry"
+            button.MouseButton1Click:Connect(function()
+                local aimPart = getAimPart(player.Character)
+                if aimPart and LocalPlayer.Character then
+                    LocalPlayer.Character:MoveTo(aimPart.Position)
+                end
+                TeleportFrame.Visible = false
+            end)
+            yPos = yPos + 55
+        end
+    end
+end
+
+TeleportButton.MouseButton1Click:Connect(function()
+    updateTeleportFrame()
+    TeleportFrame.Visible = true
+end)
+
+CloseTeleportButton.MouseButton1Click:Connect(function()
+    TeleportFrame.Visible = false
+end)
